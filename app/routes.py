@@ -1,96 +1,64 @@
-from flask import request, jsonify
+from flask import Blueprint, request
 from twilio.twiml.messaging_response import MessagingResponse
-import openai
-import logging
-from elasticsearch import Elasticsearch, ElasticsearchException, ConnectionError
+from .models import Message
 from . import db
-from .models import User, Question, Answer
-from datetime import datetime
+import openai
+from elasticsearch import Elasticsearch, NotFoundError
+import os
 
-openai.api_key = 'YOUR_OPENAI_API_KEY'
+main = Blueprint('main', __name__)
 
-try:
+openai.api_key = os.environ.get('OPENAI_API_KEY')
+
+es = None
+if os.environ.get('USE_ELASTICSEARCH') == 'True':
     es = Elasticsearch([{'host': 'localhost', 'port': 9200}])
-    es.ping()
-    elasticsearch_available = True
-except (ElasticsearchException, ConnectionError):
-    elasticsearch_available = False
 
-def retrieve_relevant_content(query):
-    if not elasticsearch_available:
-        return []
-
+def generate_answer(question):
     try:
-        response = es.search(index='content', body={
-            'query': {
-                'match': {
-                    'body': query
-                }
-            }
-        })
-        return response['hits']['hits']
-    except ElasticsearchException as e:
-        logging.error(f"Error retrieving content: {e}")
-        return []
+        if es:
+            response = es.search(index='documents', body={'query': {'match': {'content': question}}})
+            hits = response['hits']['hits']
+            if hits:
+                content = ' '.join([hit['_source']['content'] for hit in hits])
+                prompt = f"Q: {question}\nA: {content}"
+            else:
+                prompt = f"Q: {question}\nA:"
+        else:
+            prompt = f"Q: {question}\nA:"
 
-def generate_rag_answer(question):
-    relevant_content = retrieve_relevant_content(question)
-    if relevant_content:
-        context = "\n\n".join([hit['_source']['body'] for hit in relevant_content])
-        prompt = f"Context: {context}\n\nQuestion: {question}"
-    else:
-        prompt = f"Question: {question}"
-
-    try:
         response = openai.Completion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt}
-            ]
+            engine="text-davinci-003",
+            prompt=prompt,
+            max_tokens=150
         )
-        answer = response.choices[0].message['content'].strip()
-        return answer
+
+        return response.choices[0].text.strip()
+
     except Exception as e:
-        logging.error(f"Error generating answer: {e}")
+        print(f"Error generating answer: {e}")
         return "I'm sorry, I couldn't process your request."
 
-from . import create_app
-
-app = create_app()
-
-@app.route('/chatgpt', methods=['POST', 'GET'])
+@main.route('/chatgpt', methods=['POST'])
 def chatgpt():
     if request.method == 'POST':
-        whatsapp_id = request.values.get('From', '')
-        question_text = request.values.get('Body', '').lower()
+        incoming_que = request.values.get('Body', '').lower()
+        print("Question: ", incoming_que)
+        answer = generate_answer(incoming_que)
+        print("BOT Answer: ", answer)
 
-        user = User.query.filter_by(whatsapp_id=whatsapp_id).first()
-        if not user:
-            user = User(whatsapp_id=whatsapp_id, name="Unknown")
-            db.session.add(user)
-            db.session.commit()
-
-        question = Question(user_id=user.id, question=question_text)
-        db.session.add(question)
+        # Store the conversation in the database
+        new_message = Message(user_message=incoming_que, bot_response=answer)
+        db.session.add(new_message)
         db.session.commit()
-
-        answer_text = generate_rag_answer(question_text)
-
-        answer = Answer(question_id=question.id, answer=answer_text)
-        db.session.add(answer)
-        db.session.commit()
-
-        logging.info(f"Question: {question_text}")
-        logging.info(f"BOT Answer: {answer_text}")
 
         bot_resp = MessagingResponse()
         msg = bot_resp.message()
-        msg.body(answer_text)
-
+        msg.body(answer)
         return str(bot_resp)
     else:
         return "This endpoint is for POST requests from Twilio."
+
 
 @app.route('/ask', methods=['POST'])
 def ask():

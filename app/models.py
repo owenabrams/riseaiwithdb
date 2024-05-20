@@ -1,6 +1,12 @@
 from . import db
 from datetime import datetime
 
+class Message(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_message = db.Column(db.String(500))
+    bot_response = db.Column(db.String(500))
+
+
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     whatsapp_id = db.Column(db.String(50), unique=True, nullable=False)
