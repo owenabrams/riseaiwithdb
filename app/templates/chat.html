@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chat with Chatbot</title>
+</head>
+<body>
+    <h1>Chat with the Chatbot</h1>
+    <form id="chat-form">
+        <label for="question">Your Question:</label><br>
+        <input type="text" id="question" name="question"><br><br>
+        <input type="submit" value="Ask">
+    </form>
+    <div id="response"></div>
+
+    <script>
+        document.getElementById('chat-form').addEventListener('submit', function(event) {
+            event.preventDefault();
+            const question = document.getElementById('question').value;
+
+            fetch('/ask', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ question: question }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('response').innerText = 'Bot: ' + data.answer;
+            })
+            .catch(error => console.error('Error:', error));
+        });
+    </script>
+</body>
+</html>
